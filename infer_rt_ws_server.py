@@ -17,9 +17,9 @@ import face_detection
 from models import Wav2Lip
 import platform
 import pickle
-
-# for WithMediaPlayer
-from ffpyplayer.player import MediaPlayer
+import asyncio
+import websockets
+import base64
 
 checkpoint_path = './checkpoints/wav2lip_gan.pth'
 face = '1635393418204.jpg'
@@ -199,7 +199,7 @@ def load_model(path):
     return model.eval()
 
 
-def main():
+async def main(websocket):
     if not os.path.isfile(face):
         raise ValueError(
             '--face argument must be a valid path to video/image file')
@@ -209,15 +209,6 @@ def main():
         print("Image mode")
         full_frames = [cv2.imread(face)]
 
-    # Take the input audio as wav so this block will be saved
-    '''
-	if not audio.endswith('.wav'):
-		print('Extracting raw audio...')
-		command = 'ffmpeg -y -i {} -strict -2 {}'.format(audio, 'temp/temp.wav')
-
-		subprocess.call(command, shell=True)
-		audio = 'temp/temp.wav'
-	'''
     wav = audio.load_wav(audio_path, 16000)
     mel = audio.melspectrogram(wav)
     print(mel.shape)
@@ -248,19 +239,14 @@ def main():
 
     print("Generating")
     for i, (img_batch, mel_batch, frames, coords) in enumerate(
-            tqdm(gen, total=int(np.ceil(float(len(mel_chunks)) / batch_size)))):
+            tqdm(gen, total=1)):
         if i == 0:
             model = load_model(checkpoint_path)
             print("Model loaded")
 
             frame_h, frame_w = full_frames[i].shape[:-1]
-            out = cv2.VideoWriter(
-                'temp/result.avi',
-                cv2.VideoWriter_fourcc(
-                    *'DIVX'),
-                fps,
-                (frame_w,
-                 frame_h))
+            
+        print("Size of the batch: {}".format(img_batch.shape))
 
         img_batch = torch.FloatTensor(
             np.transpose(img_batch, (0, 3, 1, 2))).to(device)
@@ -271,21 +257,35 @@ def main():
             pred = model(mel_batch, img_batch)
 
         pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
+    
 
         for p, f, c in zip(pred, frames, coords):
             y1, y2, x1, x2 = c
             p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))
 
             f[y1:y2, x1:x2] = p
-            cv2.imshow('frame', f)
-            cv2.waitKey(1)
-            # out.write(f)
-
-    out.release()
+            
+            #Resize the frame
+            f = cv2.resize(f,(200,200))
+            _, buffer = cv2.imencode('.jpg', f)
+            base64_frame = base64.b64encode(buffer).decode("utf-8")
+            
+            # Send the base64-encoded frame to the client
+            await websocket.send(base64_frame)
+            
+            # cv2.imshow('Client Side', f)
+            # cv2.waitKey(1)
+            
+            break
+            
+            
 
     #command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(audio, 'temp/result.avi', outfile)
     #subprocess.call(command, shell=platform.system() != 'Windows')
 
 
 if __name__ == '__main__':
-    main()
+    start_server = websockets.serve(main, "localhost", 8765,max_size=None)  # Adjust the host and port
+    print("WebSocket server started.")
+    asyncio.get_event_loop().run_until_complete(start_server)
+    asyncio.get_event_loop().run_forever()

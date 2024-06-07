@@ -5,7 +5,7 @@ import base64
 import numpy as np
 
 async def receive_and_display_frames():
-    uri = "ws://localhost:8765"  # Adjust the WebSocket server URL
+    uri = "ws://localhost:8765/first"  # Adjust the WebSocket server URL
     frame_count = 0
     is_processing = False  # Flag to track if the client is busy processing a frame
 
